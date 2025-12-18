@@ -1,15 +1,20 @@
+# backend/app/store.py
 from typing import Dict
+from pathlib import Path
+import json
+
 from fastapi import WebSocket, HTTPException
+
 from .models import MapModel, GameState, TileType
 
-# 인메모리 저장소 (개발용)
 MAPS: Dict[str, MapModel] = {}
 ROOM_STATES: Dict[str, GameState] = {}
 ROOM_CONNECTIONS: Dict[str, Dict[str, WebSocket]] = {}  # room_id -> {role: ws}
 
+MAPS_FILE = Path(__file__).resolve().parent.parent / "maps.json"
+
 
 def create_sample_map() -> MapModel:
-    # 7x7 샘플 맵
     width, height = 7, 7
     cells: list[list[TileType]] = [["empty" for _ in range(width)] for _ in range(height)]
 
@@ -32,6 +37,45 @@ def create_sample_map() -> MapModel:
         height=height,
         cells=cells,
     )
+
+
+def load_maps_from_disk():
+    MAPS.clear()
+    if MAPS_FILE.exists():
+        try:
+            with MAPS_FILE.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                for mid, m in raw.items():
+                    MAPS[mid] = MapModel(**m)
+            elif isinstance(raw, list):
+                for m in raw:
+                    model = MapModel(**m)
+                    MAPS[model.id] = model
+        except Exception as e:
+            print("Failed to load maps.json:", e)
+
+    if "sample" not in MAPS:
+        MAPS["sample"] = create_sample_map()
+        save_maps_to_disk()
+
+
+def save_maps_to_disk():
+    serializable = {map_id: m.dict() for map_id, m in MAPS.items()}
+    with MAPS_FILE.open("w", encoding="utf-8") as f:
+        json.dump(serializable, f, ensure_ascii=False, indent=2)
+
+
+def upsert_map(map_model: MapModel) -> MapModel:
+    MAPS[map_model.id] = map_model
+    save_maps_to_disk()
+    return map_model
+
+
+def delete_map(map_id: str):
+    if map_id in MAPS:
+        del MAPS[map_id]
+        save_maps_to_disk()
 
 
 def init_room(room_id: str, map_id: str) -> GameState:
@@ -74,5 +118,4 @@ async def broadcast_state(room_id: str):
         try:
             await ws.send_json(payload)
         except Exception:
-            # 끊긴 소켓은 일단 무시
             pass
